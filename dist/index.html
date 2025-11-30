@@ -1,0 +1,19 @@
+<html>
+
+<head>
+  
+<script type="module">
+import init, * as bindings from '/angry-birds-97ac88bf265026fc.js';
+const wasm = await init({ module_or_path: '/angry-birds-97ac88bf265026fc_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+  
+<link rel="modulepreload" href="/angry-birds-97ac88bf265026fc.js" crossorigin="anonymous" integrity="sha384-UfX77hjwYVUuAhi41XIUjQWgf2maRv8guF5fzLFdfGRaAj95irjICtnl/b7K1kzs"><link rel="preload" href="/angry-birds-97ac88bf265026fc_bg.wasm" crossorigin="anonymous" integrity="sha384-27TTvD35nJB7+upD12IX1eUtxpJDoNw69aHtYMappfYYarbXUPZLNWJrsqUq70xM" as="fetch" type="application/wasm"></head>
+
+</html>
