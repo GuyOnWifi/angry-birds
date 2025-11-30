@@ -1,0 +1,26 @@
+[package]
+name = "angry-birds"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+bevy_debug_stepping = ["bevy/bevy_debug_stepping"]
+
+
+[dependencies]
+avian2d = "0.4.1"
+bevy = { version = "0.17.3" }
+bevy_ecs = "0.17.3"
+
+# Enable a small amount of optimization in the dev profile.
+[profile.dev]
+opt-level = 1
+
+# Enable a large amount of optimization in the dev profile for dependencies.
+[profile.dev.package."*"]
+opt-level = 3
+
+# for Linux
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
