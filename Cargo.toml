@@ -3,14 +3,13 @@ name = "angry-birds"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-bevy_debug_stepping = ["bevy/bevy_debug_stepping"]
-
-
 [dependencies]
 avian2d = "0.4.1"
 bevy = { version = "0.17.3" }
+bevy-inspector-egui = "0.35.0"
 bevy_ecs = "0.17.3"
+bevy_egui = "0.38.0"
+egui = "0.33.2"
 
 # Enable a small amount of optimization in the dev profile.
 [profile.dev]
@@ -24,3 +23,8 @@ opt-level = 3
 [target.x86_64-unknown-linux-gnu]
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=/usr/bin/mold"]
+
+[profile.release]
+lto = true        # Link-time optimization  
+opt-level = "z"   # Size-focused optimizations  
+codegen-units = 1 # Slower build but denser output
