@@ -1,6 +1,6 @@
 use avian2d::{math::Vector, prelude::*};
 use bevy::prelude::*;
-use bevy_egui::EguiPlugin;
+use bevy_egui::{EguiContexts, EguiPlugin, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 fn main() {
@@ -11,14 +11,22 @@ fn main() {
                 ..default()
             }),
             PhysicsPlugins::default(),
-            PhysicsDebugPlugin::default(),
+            // PhysicsDebugPlugin::default(),
         ))
         .add_plugins(EguiPlugin::default())
-        .add_plugins(WorldInspectorPlugin::new())
+        // .add_plugins(WorldInspectorPlugin::new())
         .insert_resource(Gravity(Vec2::NEG_Y * 9.8 * 100.0)) // Scale gravity for pixels
         .init_resource::<DragState>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (input_system, time_control_system))
+        .add_systems(
+            Update,
+            (
+                input_system,
+                time_control_system,
+                hover_info_system,
+                block_destruction_system,
+            ),
+        )
         .run();
 }
 
@@ -33,6 +41,9 @@ struct Block;
 
 #[derive(Component)]
 struct Slingshot;
+
+#[derive(Component)]
+struct BlockDescription(String);
 
 #[derive(Resource, Default)]
 struct DragState {
@@ -84,6 +95,9 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMu
         Transform::from_xyz(slingshot_pos.x, slingshot_pos.y + 100.0, 2.0),
         RigidBody::Kinematic, // Kinematic while waiting
         Collider::circle(23.0),
+        CollidingEntities::default(),
+        SweptCcd::default(),
+        ColliderDensity(5.0),
         Bird,
     ));
 
@@ -95,6 +109,7 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMu
 enum BlockMaterial {
     Wood,
     Steel,
+    Invisible,
 }
 
 #[derive(Clone, Copy)]
@@ -112,6 +127,7 @@ struct BlockCreator {
     shape: BlockShape,
     pos: Vec2,
     rotation: Quat,
+    description: Option<String>,
 }
 
 struct PigCreator {
@@ -136,6 +152,19 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: right_support_pos,
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    // Left: A solid base of stone
+    // Using SquareLarge (82x82)
+    let middle_support_h = 83.0;
+    let left_support_pos = Vec2::new(center_x, ground_top + middle_support_h / 2.0);
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Steel,
+        shape: BlockShape::ShortBeam,
+        pos: left_support_pos,
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     // Left: A solid base of stone
@@ -147,12 +176,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::SquareLarge,
         pos: left_support_pos,
         rotation: Quat::IDENTITY,
-    });
-
-    // Pig under the floor
-    pigs.push(PigCreator {
-        pos: Vec2::new(center_x, ground_top + 23.0),
-        pig_type: PigType::Normal,
+        description: None,
     });
 
     // --- The Main Floor Plank ---
@@ -168,18 +192,106 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(center_x - 80.0, floor_y),
         rotation: Quat::IDENTITY,
+        description: None,
     });
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::LongBeam,
         pos: Vec2::new(center_x + 80.0, floor_y),
         rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    // Left Wing
+    // These blocks are placed relative to the right tower's x-coordinate,
+    // but at the same y-level as the main floor planks.
+    // Assuming 'right_tower_x' is intended to be 'center_x' for these wings,
+    // or that these are meant to be part of the main floor structure.
+    // Given the instruction "Add descriptions to the wing blocks", and the provided
+    // code snippet, it seems these are new blocks.
+    // The original code does not define `l4_y` at this point, so we'll use `floor_y`.
+    // The `right_tower_x` variable is defined later, so we'll use `center_x` for now,
+    // or assume these are meant to be placed relative to the main structure.
+    // For faithfulness to the instruction, we'll use `center_x` for placement
+    // and `floor_y` for height, as `l4_y` is not defined here.
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(center_x - 100.0 - 167.0, floor_y), // Adjusted position to be a "wing" off the main platform
+        rotation: Quat::IDENTITY,
+        description: Some("Left Wing: Unstable!".to_string()),
+    });
+    // Right Wing
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(center_x + 100.0 + 167.0, floor_y), // Adjusted position
+        rotation: Quat::IDENTITY,
+        description: Some("Right Wing: Very Unstable!".to_string()),
+    });
+
+    // Even more unstable layer
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Steel,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(center_x - 50.0, floor_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Steel,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(center_x + 50.0, floor_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    // invisible supports
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(center_x, floor_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(center_x + 120.0, floor_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(center_x - 120.0, floor_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    // floor of the unstable layer (slight gap is to allow a metal box to "pin down")
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(center_x - 80.0 - 7.0, floor_y + 83.0 + 10.0 + 10.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(center_x + 80.0 + 5.0, floor_y + 83.0 + 10.0 + 10.0),
+        rotation: Quat::IDENTITY,
+        description: None,
     });
 
     // --- Left Tower (The "Box") ---
     // Sitting on the left side of the floor.
-    let left_tower_x = center_x - 120.0;
-    let mut current_y = floor_y + 10.0; // Top of floor
+    let left_tower_x = center_x - 90.0;
+    let mut current_y = floor_y + 10.0 + 83.0 + 20.0; // Top of floor
 
     // Walls: Vertical LongBeams (167 tall)
     let wall_h = 167.0;
@@ -191,6 +303,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(left_tower_x - 70.0, wall_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
     // Right Wall (Shared with middle?)
     blocks.push(BlockCreator {
@@ -198,6 +311,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(left_tower_x + 70.0, wall_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     // Shelves inside the box (The "Glass" windows replaced by Wood)
@@ -207,11 +321,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(left_tower_x, current_y + 40.0),
         rotation: Quat::IDENTITY,
-    });
-    // Pig on lower shelf
-    pigs.push(PigCreator {
-        pos: Vec2::new(left_tower_x, current_y + 40.0 + 20.0 + 23.0),
-        pig_type: PigType::Normal,
+        description: None,
     });
 
     // Upper Shelf
@@ -220,6 +330,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(left_tower_x, current_y + 100.0),
         rotation: Quat::IDENTITY,
+        description: None,
     });
     // Pig on upper shelf
     pigs.push(PigCreator {
@@ -230,29 +341,58 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // Ceiling of Left Tower
     let ceiling_y = current_y + wall_h + 10.0;
     blocks.push(BlockCreator {
-        material: BlockMaterial::Steel, // Stone slab on top
+        material: BlockMaterial::Wood, // Stone slab on top
         shape: BlockShape::LongBeam,
         pos: Vec2::new(left_tower_x, ceiling_y),
         rotation: Quat::IDENTITY,
+        description: None,
     });
 
-    // Debris on top of Left Tower
+    // Left Tower "jutting out"
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood, // Stone slab on top
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(left_tower_x - 50.0, ceiling_y + 10.0 + 83.0 / 2.0),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood, // Stone slab on top
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(left_tower_x - 50.0, ceiling_y + 10.0 + 10.0 + 83.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    let jutted_floor_x = left_tower_x - 50.0;
+    let jutted_floor_y = ceiling_y + 10.0 + 10.0 + 83.0;
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
-        shape: BlockShape::ShortBeam,
-        pos: Vec2::new(left_tower_x - 40.0, ceiling_y + 20.0 + 41.5),
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(
+            jutted_floor_x - 163.0 / 2.0 + 10.0,
+            jutted_floor_y + 163.0 / 2.0 + 10.0,
+        ),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: Some("Left Jutting Beam".to_string()),
     });
+
     blocks.push(BlockCreator {
-        material: BlockMaterial::Steel,
-        shape: BlockShape::SquareSmall,
-        pos: Vec2::new(left_tower_x + 20.0, ceiling_y + 20.0 + 10.0),
-        rotation: Quat::IDENTITY,
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0,
+            jutted_floor_y + 163.0 / 2.0 + 10.0,
+        ),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: Some("Right Jutting Beam".to_string()),
     });
 
     // --- Right Tower (The Tall Unstable One) ---
-    let right_tower_x = center_x + 80.0;
-    current_y = floor_y + 10.0;
+    let right_tower_x = center_x + 100.0;
+    current_y = floor_y + 10.0 + 83.0 + 20.0;
 
     // Level 1: Vertical Wood Beams (Short or Long? Image looks like stacked frames)
     // Let's use Vertical ShortBeams (83 tall) for a more segmented look
@@ -264,12 +404,14 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x - 50.0, l1_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x + 50.0, l1_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     // Pig in Level 1
@@ -285,6 +427,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(right_tower_x, current_y),
         rotation: Quat::IDENTITY,
+        description: None,
     });
 
     // Level 2: More Vertical Beams (The "Glass" part replaced by Wood)
@@ -297,12 +440,14 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(right_tower_x - 40.0, l2_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::LongBeam,
         pos: Vec2::new(right_tower_x + 40.0, l2_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     // Pig in Level 2
@@ -318,6 +463,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::LongBeam,
         pos: Vec2::new(right_tower_x, current_y),
         rotation: Quat::IDENTITY,
+        description: None,
     });
 
     // Level 3: The "Penthouse"
@@ -330,17 +476,19 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x - 30.0, l3_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x + 30.0, l3_y),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     // King Pig at the top
     pigs.push(PigCreator {
-        pos: Vec2::new(right_tower_x, current_y + 10.0 + 23.0),
+        pos: Vec2::new(right_tower_x, l3_y + 10.0 + 23.0 + 70.0 + 50.0),
         pig_type: PigType::King,
     });
 
@@ -351,6 +499,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x, current_y),
         rotation: Quat::IDENTITY,
+        description: None,
     });
 
     // Top Crown
@@ -358,14 +507,16 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::SquareSmall,
-        pos: Vec2::new(right_tower_x - 20.0, current_y + 10.0 + 10.0),
+        pos: Vec2::new(right_tower_x - 25.0, current_y + 10.0 + 10.0 + 5.0),
         rotation: Quat::IDENTITY,
+        description: None,
     });
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::SquareSmall,
-        pos: Vec2::new(right_tower_x + 20.0, current_y + 10.0 + 10.0),
+        pos: Vec2::new(right_tower_x + 25.0, current_y + 10.0 + 10.0 + 5.0),
         rotation: Quat::IDENTITY,
+        description: None,
     });
 
     (blocks, pigs)
@@ -381,6 +532,7 @@ fn spawn_game(commands: &mut Commands, asset_server: &Res<AssetServer>) {
             block.shape,
             block.pos,
             block.rotation,
+            block.description,
         );
     }
 
@@ -401,10 +553,12 @@ fn spawn_block(
     shape: BlockShape,
     pos: Vec2,
     rotation: Quat,
+    description: Option<String>,
 ) {
     let material_str = match material {
         BlockMaterial::Steel => "steel/steel",
         BlockMaterial::Wood => "wood/wood",
+        BlockMaterial::Invisible => "",
     };
 
     let shape_str = match shape {
@@ -429,13 +583,22 @@ fn spawn_block(
         ),
     };
 
-    let asset_path = format!("blocks/{}_{}.png", material_str, shape_str);
-    commands.spawn((
+    let asset_path = if matches!(material, BlockMaterial::Invisible) {
+        "".to_string()
+    } else {
+        format!("blocks/{}_{}.png", material_str, shape_str)
+    };
+    let mut cmd = commands.spawn((
         Sprite::from_image(asset_server.load(asset_path)),
         Transform::from_xyz(pos.x, pos.y, 0.0).with_rotation(rotation),
         RigidBody::Dynamic,
         collider,
+        Block,
     ));
+
+    if let Some(desc) = description {
+        cmd.insert(BlockDescription(desc));
+    }
 }
 
 fn spawn_pig(
@@ -519,6 +682,60 @@ fn time_control_system(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Tim
         if keyboard.just_pressed(KeyCode::KeyS) {
             // Step by fixed timestep (usually 1/60)
             time.advance_by(std::time::Duration::from_secs_f32(1.0 / 60.0));
+        }
+    }
+}
+
+fn hover_info_system(
+    mut contexts: EguiContexts,
+    windows: Query<&Window>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    spatial_query: SpatialQuery,
+    block_desc_q: Query<&BlockDescription>,
+) {
+    let Some((camera, camera_transform)) = camera_q.iter().next() else {
+        return;
+    };
+    let Some(window) = windows.iter().next() else {
+        return;
+    };
+
+    if let Some(cursor_pos) = window.cursor_position() {
+        if let Ok(world_pos) = camera.viewport_to_world_2d(camera_transform, cursor_pos) {
+            // Raycast or point projection? Point projection is easier for "hovering".
+            // Let's check for entities at the cursor position.
+            // We'll use a small radius for "picking".
+            let intersections =
+                spatial_query.point_intersections(world_pos, &SpatialQueryFilter::default());
+
+            for entity in intersections {
+                if let Ok(desc) = block_desc_q.get(entity) {
+                    println!("desc: {}", desc.0);
+                    egui::Window::new("Block Info")
+                        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
+                        .show(contexts.ctx_mut().unwrap(), |ui| {
+                            ui.label(&desc.0);
+                        });
+                    break; // Only show one
+                }
+            }
+        }
+    }
+}
+
+fn block_destruction_system(
+    mut commands: Commands,
+    block_q: Query<Entity, With<Block>>,
+    bird_q: Query<(&LinearVelocity, &CollidingEntities), With<Bird>>,
+) {
+    for (velocity, colliding_entities) in bird_q.iter() {
+        if velocity.length() > 100.0 {
+            // Threshold
+            for &hit_entity in colliding_entities.iter() {
+                if block_q.contains(hit_entity) {
+                    commands.entity(hit_entity).despawn();
+                }
+            }
         }
     }
 }
