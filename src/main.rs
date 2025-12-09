@@ -1,6 +1,6 @@
 use avian2d::{math::Vector, prelude::*};
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiPlugin, egui};
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 fn main() {
@@ -20,13 +20,9 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (
-                input_system,
-                time_control_system,
-                hover_info_system,
-                block_destruction_system,
-            ),
+            (input_system, time_control_system, block_destruction_system),
         )
+        .add_systems(EguiPrimaryContextPass, (pig_info_system, hover_info_system))
         .run();
 }
 
@@ -40,7 +36,9 @@ struct Pig;
 struct Block;
 
 #[derive(Component)]
-struct Slingshot;
+struct Slingshot {
+    pub desc: String,
+}
 
 #[derive(Component)]
 struct BlockDescription(String);
@@ -51,7 +49,7 @@ struct DragState {
     start_pos: Vec2,
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMut<Time<Physics>>) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>, _time: ResMut<Time<Physics>>) {
     // Pause time to view structure
     // time.pause();
 
@@ -79,22 +77,26 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMu
     commands.spawn((
         Sprite::from_image(asset_server.load("slingshot_right.png")),
         Transform::from_xyz(slingshot_pos.x + 20.0, slingshot_pos.y + 30.0, 1.0),
-        Slingshot,
+        Slingshot {
+            desc: "Test".into(),
+        },
     ));
 
     // Left part (Front)
     commands.spawn((
         Sprite::from_image(asset_server.load("slingshot_left.png")),
         Transform::from_xyz(slingshot_pos.x - 5.0, slingshot_pos.y + 80.0, 3.0), // Higher Z to be in front of bird
-        Slingshot,
+        Slingshot {
+            desc: "Test".into(),
+        },
     ));
 
     // Bird (Ready to launch)
     commands.spawn((
-        Sprite::from_image(asset_server.load("pigs/pig_silly.png")),
+        Sprite::from_image(asset_server.load("birds/red.png")),
         Transform::from_xyz(slingshot_pos.x, slingshot_pos.y + 100.0, 2.0),
         RigidBody::Kinematic, // Kinematic while waiting
-        Collider::circle(23.0),
+        Collider::circle(22.0),
         CollidingEntities::default(),
         SweptCcd::default(),
         ColliderDensity(5.0),
@@ -152,7 +154,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: right_support_pos,
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: None,
+        description: Some("FFMPEG: A video decoding library that powers Spotify, Instagram, Youtube, Tiktok and more.".into()),
     });
 
     // Left: A solid base of stone
@@ -164,7 +166,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: left_support_pos,
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: None,
+        description: Some("OpenSSL: Internet traffic encryption for secure communication. Powers banking and e-commerce".into()),
     });
 
     // Left: A solid base of stone
@@ -176,7 +178,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::SquareLarge,
         pos: left_support_pos,
         rotation: Quat::IDENTITY,
-        description: None,
+        description: Some("The Linux Kernel. The biggest open source project, with over 40 million lines of code. Powers virtually every server hosting Internet content.".into()),
     });
 
     // --- The Main Floor Plank ---
@@ -236,7 +238,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(center_x - 50.0, floor_y + 10.0 + 83.0 / 2.0),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: None,
+        description: Some("PyTorch: The open-source AI machine learning tool that powers all AI training, including ChatGPT".into()),
     });
 
     blocks.push(BlockCreator {
@@ -244,7 +246,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(center_x + 50.0, floor_y + 10.0 + 83.0 / 2.0),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: None,
+        description: Some("LLVM & GCC: Open source tools that run code. Every programmer, every programming language likely has had some amount of LLVM or GCC in it.".into()),
     });
 
     // invisible supports
@@ -335,7 +337,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // Pig on upper shelf
     pigs.push(PigCreator {
         pos: Vec2::new(left_tower_x, current_y + 100.0 + 20.0 + 23.0),
-        pig_type: PigType::Normal,
+        pig_type: PigType::BombBird,
     });
 
     // Ceiling of Left Tower
@@ -417,7 +419,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // Pig in Level 1
     pigs.push(PigCreator {
         pos: Vec2::new(right_tower_x, current_y + 23.0),
-        pig_type: PigType::Normal,
+        pig_type: PigType::TriangleBird,
     });
 
     // Level 1 Ceiling
@@ -453,7 +455,7 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // Pig in Level 2
     pigs.push(PigCreator {
         pos: Vec2::new(right_tower_x, current_y + 10.0 + 23.0),
-        pig_type: PigType::Normal,
+        pig_type: PigType::BlueBird,
     });
 
     // Level 2 Ceiling
@@ -544,6 +546,11 @@ fn spawn_game(commands: &mut Commands, asset_server: &Res<AssetServer>) {
 enum PigType {
     King,
     Normal,
+    RedBird,
+    BombBird,
+    TriangleBird,
+    EggBird,
+    BlueBird,
 }
 
 fn spawn_block(
@@ -607,16 +614,28 @@ fn spawn_pig(
     pig_type: PigType,
     pos: Vec2,
 ) {
-    let (path, radius) = match pig_type {
-        PigType::King => ("pigs/pig_king.png", 70.0),
-        PigType::Normal => ("pigs/pig_normal.png", 23.0),
+    let (path, collider) = match pig_type {
+        PigType::King => ("pigs/pig_king.png", Collider::circle(70.0)),
+        PigType::Normal => ("pigs/pig_normal.png", Collider::circle(23.0)),
+        PigType::RedBird => ("birds/red.png", Collider::circle(22.0)),
+        PigType::BombBird => ("birds/black.png", Collider::circle(42.0)),
+        PigType::TriangleBird => (
+            "birds/yellow.png",
+            Collider::triangle(
+                Vector::new(0.0, 39.0),
+                Vector::new(-39.0, -39.0),
+                Vector::new(39.0, -39.0),
+            ),
+        ),
+        PigType::EggBird => ("birds/white.png", Collider::capsule(40.0, 60.0)), // Approximate capsule
+        PigType::BlueBird => ("birds/blue.png", Collider::circle(22.0)),
     };
 
     commands.spawn((
         Sprite::from_image(asset_server.load(path)),
         Transform::from_xyz(pos.x, pos.y, 0.0),
         RigidBody::Dynamic,
-        Collider::circle(radius),
+        collider,
         Pig,
     ));
 }
@@ -686,6 +705,16 @@ fn time_control_system(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Tim
     }
 }
 
+fn pig_info_system(mut contexts: EguiContexts, slingshot: Query<&Slingshot>) {
+    if let Ok(ctx) = contexts.ctx_mut() {
+        egui::Window::new("Pig Info")
+            .anchor(egui::Align2::LEFT_TOP, [10.0, 200.0])
+            .show(ctx, |ui| {
+                ui.label(slingshot.iter().next().unwrap().desc.clone())
+            });
+    }
+}
+
 fn hover_info_system(
     mut contexts: EguiContexts,
     windows: Query<&Window>,
@@ -708,17 +737,22 @@ fn hover_info_system(
             let intersections =
                 spatial_query.point_intersections(world_pos, &SpatialQueryFilter::default());
 
+            let desc_ui =
+                egui::Window::new("Block Info").anchor(egui::Align2::LEFT_TOP, [10.0, 10.0]);
+
+            let mut content_message = "Hover over a block for more info!";
+
             for entity in intersections {
                 if let Ok(desc) = block_desc_q.get(entity) {
                     println!("desc: {}", desc.0);
-                    egui::Window::new("Block Info")
-                        .anchor(egui::Align2::LEFT_TOP, [10.0, 10.0])
-                        .show(contexts.ctx_mut().unwrap(), |ui| {
-                            ui.label(&desc.0);
-                        });
+                    content_message = &desc.0;
                     break; // Only show one
                 }
             }
+
+            desc_ui.show(contexts.ctx_mut().unwrap(), |ui| {
+                ui.label(content_message);
+            });
         }
     }
 }
