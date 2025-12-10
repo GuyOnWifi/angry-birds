@@ -183,6 +183,7 @@ dependencies = [
  "bevy_ecs",
  "bevy_egui",
  "egui",
+ "rand",
 ]
 
 [[package]]

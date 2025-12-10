@@ -2,6 +2,14 @@ use avian2d::{math::Vector, prelude::*};
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
+use rand::seq::IndexedRandom;
+
+const PIG_TEXT: &[&str] = &[
+    "The XZ utils incident: where a hacker snuck a virus into burnt-out maintainer's code",
+    "The FFMPEG incident: where Microsoft demanded volunteers to fix their \'high priority\' issue",
+    "Amazon vs Redis: When Amazon wrapped Redis' code and made billions by selling it as a cloud service",
+    "OpenSSL: Funding cuts for a library used by most internet encryption",
+];
 
 fn main() {
     App::new()
@@ -16,18 +24,38 @@ fn main() {
         .add_plugins(EguiPlugin::default())
         // .add_plugins(WorldInspectorPlugin::new())
         .insert_resource(Gravity(Vec2::NEG_Y * 9.8 * 100.0)) // Scale gravity for pixels
-        .init_resource::<DragState>()
+        .insert_resource(SlingshotState {
+            desc: "Launch a pig to find out what disaster you are about to unleash!\n\nThe XZ utils incident: where a hacker snuck a virus into burnt-out maintainer's code".into(),
+            ..Default::default()
+        })
+        .insert_resource(RespawnTimer(Timer::from_seconds(2.0, TimerMode::Once)))
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (input_system, time_control_system, block_destruction_system),
+            (
+                input_system,
+                time_control_system,
+                block_destruction_system,
+                respawn_bird_system,
+            ),
         )
-        .add_systems(EguiPrimaryContextPass, (pig_info_system, hover_info_system))
+        .add_systems(
+            EguiPrimaryContextPass,
+            (
+                pig_info_system,
+                hover_info_system,
+                restart_ui_system,
+                pig_destruction_system,
+            ),
+        )
         .run();
 }
 
 #[derive(Component)]
 struct Bird;
+
+#[derive(Component)]
+struct OnSlingshot;
 
 #[derive(Component)]
 struct Pig;
@@ -36,20 +64,25 @@ struct Pig;
 struct Block;
 
 #[derive(Component)]
-struct Slingshot {
-    pub desc: String,
-}
+struct Invisible;
+
+#[derive(Component)]
+struct Slingshot;
 
 #[derive(Component)]
 struct BlockDescription(String);
 
 #[derive(Resource, Default)]
-struct DragState {
+struct SlingshotState {
     is_dragging: bool,
     start_pos: Vec2,
+    desc: String,
 }
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, _time: ResMut<Time<Physics>>) {
+#[derive(Resource)]
+struct RespawnTimer(Timer);
+
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMut<Time<Physics>>) {
     // Pause time to view structure
     // time.pause();
 
@@ -77,37 +110,24 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, _time: ResMut<T
     commands.spawn((
         Sprite::from_image(asset_server.load("slingshot_right.png")),
         Transform::from_xyz(slingshot_pos.x + 20.0, slingshot_pos.y + 30.0, 1.0),
-        Slingshot {
-            desc: "Test".into(),
-        },
+        Slingshot,
     ));
 
     // Left part (Front)
     commands.spawn((
         Sprite::from_image(asset_server.load("slingshot_left.png")),
         Transform::from_xyz(slingshot_pos.x - 5.0, slingshot_pos.y + 80.0, 3.0), // Higher Z to be in front of bird
-        Slingshot {
-            desc: "Test".into(),
-        },
+        Slingshot,
     ));
 
     // Bird (Ready to launch)
-    commands.spawn((
-        Sprite::from_image(asset_server.load("birds/red.png")),
-        Transform::from_xyz(slingshot_pos.x, slingshot_pos.y + 100.0, 2.0),
-        RigidBody::Kinematic, // Kinematic while waiting
-        Collider::circle(22.0),
-        CollidingEntities::default(),
-        SweptCcd::default(),
-        ColliderDensity(5.0),
-        Bird,
-    ));
+    spawn_bird(&mut commands, &asset_server);
 
     // Complex Tower
     spawn_game(&mut commands, &asset_server);
 }
 
-#[derive(Clone, Copy)]
+#[derive(Component, Clone, Copy)]
 enum BlockMaterial {
     Wood,
     Steel,
@@ -216,21 +236,6 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // or assume these are meant to be placed relative to the main structure.
     // For faithfulness to the instruction, we'll use `center_x` for placement
     // and `floor_y` for height, as `l4_y` is not defined here.
-    blocks.push(BlockCreator {
-        material: BlockMaterial::Wood,
-        shape: BlockShape::LongBeam,
-        pos: Vec2::new(center_x - 100.0 - 167.0, floor_y), // Adjusted position to be a "wing" off the main platform
-        rotation: Quat::IDENTITY,
-        description: Some("Left Wing: Unstable!".to_string()),
-    });
-    // Right Wing
-    blocks.push(BlockCreator {
-        material: BlockMaterial::Wood,
-        shape: BlockShape::LongBeam,
-        pos: Vec2::new(center_x + 100.0 + 167.0, floor_y), // Adjusted position
-        rotation: Quat::IDENTITY,
-        description: Some("Right Wing: Very Unstable!".to_string()),
-    });
 
     // Even more unstable layer
     blocks.push(BlockCreator {
@@ -353,11 +358,11 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     // Left Tower "jutting out"
 
     blocks.push(BlockCreator {
-        material: BlockMaterial::Wood, // Stone slab on top
+        material: BlockMaterial::Steel, // Stone slab on top
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(left_tower_x - 50.0, ceiling_y + 10.0 + 83.0 / 2.0),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: None,
+        description: Some("Git: The \'Google Docs\' of coding".into()),
     });
 
     blocks.push(BlockCreator {
@@ -371,25 +376,154 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
     let jutted_floor_x = left_tower_x - 50.0;
     let jutted_floor_y = ceiling_y + 10.0 + 10.0 + 83.0;
     blocks.push(BlockCreator {
-        material: BlockMaterial::Wood,
-        shape: BlockShape::LongBeam,
+        material: BlockMaterial::Steel,
+        shape: BlockShape::ShortBeam,
         pos: Vec2::new(
             jutted_floor_x - 163.0 / 2.0 + 10.0,
-            jutted_floor_y + 163.0 / 2.0 + 10.0,
+            jutted_floor_y + 81.0 / 2.0 + 10.0,
         ),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: Some("Left Jutting Beam".to_string()),
+        description: Some("Redis: The ultra-fast data cache for high-performance websites".into()),
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(jutted_floor_x - 163.0 / 2.0 + 10.0, jutted_floor_y - 20.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::SquareLarge,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0,
+            jutted_floor_y + 81.0 / 2.0 + 10.0,
+        ),
+        rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+        description: None,
     });
 
     blocks.push(BlockCreator {
         material: BlockMaterial::Wood,
         shape: BlockShape::LongBeam,
         pos: Vec2::new(
-            jutted_floor_x + 163.0 / 2.0 - 10.0,
-            jutted_floor_y + 163.0 / 2.0 + 10.0,
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 163.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(jutted_floor_x - 163.0 - 10.0, jutted_floor_y + 81.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(jutted_floor_x - 163.0 - 163.0, jutted_floor_y + 81.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    // King Pig at the top
+    pigs.push(PigCreator {
+        pos: Vec2::new(jutted_floor_x - 81.0, jutted_floor_y + 81.0 + 90.0 + 10.0),
+        pig_type: PigType::King,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(
+            jutted_floor_x - 81.0 + 81.0,
+            jutted_floor_y + 81.0 + 90.0 + 10.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(
+            jutted_floor_x - 81.0 - 81.0,
+            jutted_floor_y + 81.0 + 90.0 + 10.0,
+        ),
+
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Steel,
+        shape: BlockShape::ShortBeam,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0 - 66.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0 + 41.0 + 10.0,
         ),
         rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
-        description: Some("Right Jutting Beam".to_string()),
+        description: Some(
+            "PostgreSQL: The database that powers all of our data storage and retrieval".into(),
+        ),
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Wood,
+        shape: BlockShape::LongBeam,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0 - 66.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0 + 41.0 + 10.0 + 41.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    // King Pig at the top
+    pigs.push(PigCreator {
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0 - 66.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0 + 41.0 + 10.0 + 41.0 + 85.0,
+        ),
+        pig_type: PigType::King,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0 - 66.0 - 86.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0 + 41.0 + 10.0 + 41.0 + 85.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(
+            jutted_floor_x + 163.0 / 2.0 - 10.0 - 326.0 - 66.0 + 86.0,
+            jutted_floor_y + 81.0 + 10.0 + 10.0 + 41.0 + 10.0 + 41.0 + 85.0,
+        ),
+        rotation: Quat::IDENTITY,
+        description: None,
     });
 
     // --- Right Tower (The Tall Unstable One) ---
@@ -494,10 +628,18 @@ fn get_game_layout() -> (Vec<BlockCreator>, Vec<PigCreator>) {
         pig_type: PigType::King,
     });
 
+    blocks.push(BlockCreator {
+        material: BlockMaterial::Invisible,
+        shape: BlockShape::SquareSmall,
+        pos: Vec2::new(right_tower_x + 84.0, l3_y + 10.0 + 23.0 + 70.0 + 50.0),
+        rotation: Quat::IDENTITY,
+        description: None,
+    });
+
     // Level 3 Ceiling (Stone)
     current_y += 10.0 + l3_h + 10.0;
     blocks.push(BlockCreator {
-        material: BlockMaterial::Steel,
+        material: BlockMaterial::Wood,
         shape: BlockShape::ShortBeam,
         pos: Vec2::new(right_tower_x, current_y),
         rotation: Quat::IDENTITY,
@@ -543,6 +685,7 @@ fn spawn_game(commands: &mut Commands, asset_server: &Res<AssetServer>) {
     }
 }
 
+#[derive(Component, Clone, Copy, PartialEq)]
 enum PigType {
     King,
     Normal,
@@ -598,10 +741,19 @@ fn spawn_block(
     let mut cmd = commands.spawn((
         Sprite::from_image(asset_server.load(asset_path)),
         Transform::from_xyz(pos.x, pos.y, 0.0).with_rotation(rotation),
-        RigidBody::Dynamic,
+        if matches!(material, BlockMaterial::Invisible) {
+            RigidBody::Static
+        } else {
+            RigidBody::Dynamic
+        },
         collider,
         Block,
     ));
+
+    if matches!(material, BlockMaterial::Invisible) {
+        cmd.insert(Invisible);
+    }
+    cmd.insert(material);
 
     if let Some(desc) = description {
         cmd.insert(BlockDescription(desc));
@@ -636,17 +788,60 @@ fn spawn_pig(
         Transform::from_xyz(pos.x, pos.y, 0.0),
         RigidBody::Dynamic,
         collider,
+        CollidingEntities::default(),
         Pig,
+        pig_type,
     ));
+}
+
+fn spawn_bird(commands: &mut Commands, asset_server: &Res<AssetServer>) {
+    let slingshot_pos = Vec2::new(-300.0, -220.0);
+
+    commands.spawn((
+        Sprite::from_image(asset_server.load("pigs/pig_silly.png")),
+        Transform::from_xyz(slingshot_pos.x, slingshot_pos.y + 100.0, 2.0),
+        RigidBody::Kinematic, // Kinematic while waiting
+        Collider::circle(22.0),
+        CollidingEntities::default(),
+        SweptCcd::default(),
+        ColliderDensity(5.0),
+        Bird,
+        OnSlingshot,
+    ));
+}
+
+fn respawn_bird_system(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    time: Res<Time>,
+    mut timer: ResMut<RespawnTimer>,
+    bird_q: Query<Entity, With<OnSlingshot>>,
+    mut slingshot_state: ResMut<SlingshotState>,
+) {
+    if bird_q.iter().next().is_some() {
+        // defined a bird, so reset timer
+        timer.0.reset();
+        return;
+    }
+
+    timer.0.tick(time.delta());
+    if timer.0.just_finished() {
+        spawn_bird(&mut commands, &asset_server);
+        // Update text
+        let mut rng = rand::rng();
+        if let Some(text) = PIG_TEXT.choose(&mut rng) {
+            slingshot_state.desc = text.to_string();
+        }
+    }
 }
 
 fn input_system(
     mut commands: Commands,
-    mut drag_state: ResMut<DragState>,
+    mut drag_state: ResMut<SlingshotState>,
     windows: Query<&Window>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     mouse_button: Res<ButtonInput<MouseButton>>,
-    mut bird_q: Query<(Entity, &mut Transform), With<Bird>>,
+    mut bird_q: Query<(Entity, &mut Transform), (With<Bird>, With<OnSlingshot>)>,
 ) {
     let Some((camera, camera_transform)) = camera_q.iter().next() else {
         return;
@@ -681,9 +876,21 @@ fn input_system(
                         commands.entity(entity).insert(RigidBody::Dynamic);
                         let force = (drag_state.start_pos - world_pos) * 15.0; // Launch force
                         commands.entity(entity).insert(LinearVelocity(force));
+                        commands.entity(entity).remove::<OnSlingshot>();
                     }
                 }
             }
+        }
+    }
+}
+
+fn pig_destruction_system(
+    mut commands: Commands,
+    pig_q: Query<(Entity, &LinearVelocity, &CollidingEntities), With<Pig>>,
+) {
+    for (entity, velocity, colliding_entities) in pig_q.iter() {
+        if !colliding_entities.is_empty() && velocity.length() > 600.0 {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -705,12 +912,40 @@ fn time_control_system(keyboard: Res<ButtonInput<KeyCode>>, mut time: ResMut<Tim
     }
 }
 
-fn pig_info_system(mut contexts: EguiContexts, slingshot: Query<&Slingshot>) {
+fn pig_info_system(mut contexts: EguiContexts, slingshot: Res<SlingshotState>) {
     if let Ok(ctx) = contexts.ctx_mut() {
-        egui::Window::new("Pig Info")
-            .anchor(egui::Align2::LEFT_TOP, [10.0, 200.0])
+        egui::Window::new("Pig Info: What Disaster Will You Launch This Time?")
+            .default_pos((0.0, 200.0))
+            .show(ctx, |ui| ui.label(slingshot.desc.clone()));
+    }
+}
+
+fn restart_ui_system(
+    mut commands: Commands,
+    mut contexts: EguiContexts,
+    asset_server: Res<AssetServer>,
+    query: Query<Entity, Or<(With<Block>, With<Pig>, With<Bird>)>>,
+    mut slingshot_state: ResMut<SlingshotState>,
+    mut respawn_timer: ResMut<RespawnTimer>,
+) {
+    if let Ok(ctx) = contexts.ctx_mut() {
+        egui::Window::new("Game Control")
+            .default_pos((0.0, 10.0))
             .show(ctx, |ui| {
-                ui.label(slingshot.iter().next().unwrap().desc.clone())
+                if ui.button("Restart Level").clicked() {
+                    // Despawn all game entities
+                    for entity in query.iter() {
+                        commands.entity(entity).despawn();
+                    }
+
+                    // Reset state
+                    slingshot_state.desc = "Restarted!".into();
+                    respawn_timer.0.reset();
+
+                    // Respawn level
+                    spawn_game(&mut commands, &asset_server);
+                    spawn_bird(&mut commands, &asset_server);
+                }
             });
     }
 }
@@ -737,10 +972,11 @@ fn hover_info_system(
             let intersections =
                 spatial_query.point_intersections(world_pos, &SpatialQueryFilter::default());
 
-            let desc_ui =
-                egui::Window::new("Block Info").anchor(egui::Align2::LEFT_TOP, [10.0, 10.0]);
+            let desc_ui = egui::Window::new("Block Info: What's Holding up the Internet?")
+                .default_pos((0.0, 100.0));
 
-            let mut content_message = "Hover over a block for more info!";
+            let mut content_message =
+                "Hover over a metal block for more info (they're also harder to destroy)!";
 
             for entity in intersections {
                 if let Ok(desc) = block_desc_q.get(entity) {
@@ -759,17 +995,31 @@ fn hover_info_system(
 
 fn block_destruction_system(
     mut commands: Commands,
-    block_q: Query<Entity, With<Block>>,
+    block_q: Query<&BlockMaterial, With<Block>>,
+    invisible_q: Query<Entity, With<Invisible>>,
     bird_q: Query<(&LinearVelocity, &CollidingEntities), With<Bird>>,
 ) {
+    let mut any_destroyed = false;
     for (velocity, colliding_entities) in bird_q.iter() {
-        if velocity.length() > 100.0 {
-            // Threshold
-            for &hit_entity in colliding_entities.iter() {
-                if block_q.contains(hit_entity) {
+        let mag = velocity.length();
+        for &hit_entity in colliding_entities.iter() {
+            if let Ok(material) = block_q.get(hit_entity) {
+                let threshold = match material {
+                    BlockMaterial::Steel => 800.0,
+                    _ => 600.0,
+                };
+
+                if mag > threshold {
                     commands.entity(hit_entity).despawn();
+                    any_destroyed = true;
                 }
             }
+        }
+    }
+
+    if any_destroyed {
+        for entity in invisible_q.iter() {
+            commands.entity(entity).despawn();
         }
     }
 }
