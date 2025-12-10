@@ -1,5 +1,5 @@
 use avian2d::{math::Vector, prelude::*};
-use bevy::prelude::*;
+use bevy::{prelude::*, window::WindowResolution};
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui};
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use rand::seq::IndexedRandom;
@@ -37,6 +37,7 @@ fn main() {
                 time_control_system,
                 block_destruction_system,
                 respawn_bird_system,
+                configure_view_system,
             ),
         )
         .add_systems(
@@ -82,7 +83,7 @@ struct SlingshotState {
 #[derive(Resource)]
 struct RespawnTimer(Timer);
 
-fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMut<Time<Physics>>) {
+fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Pause time to view structure
     // time.pause();
 
@@ -92,15 +93,15 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>, mut time: ResMu
     // Background
     commands.spawn((
         Sprite::from_image(asset_server.load("background.png")),
-        Transform::from_xyz(0.0, 0.0, -10.0),
+        Transform::from_xyz(0.0, 0.0, -10.0).with_scale(Vec3::splat(4.0)),
     ));
 
     // Ground
     commands.spawn((
-        Sprite::from_color(Color::srgb(0.2, 0.8, 0.2), Vec2::new(1000.0, 50.0)),
+        Sprite::from_color(Color::srgb(0.2, 0.8, 0.2), Vec2::new(10000.0, 50.0)),
         Transform::from_xyz(0.0, -300.0, 0.0),
         RigidBody::Static,
-        Collider::rectangle(1000.0, 50.0),
+        Collider::rectangle(10000.0, 50.0),
     ));
 
     // Slingshot
@@ -1020,6 +1021,46 @@ fn block_destruction_system(
     if any_destroyed {
         for entity in invisible_q.iter() {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn configure_view_system(
+    mut q: Query<(&mut Projection, &mut Transform), With<Camera2d>>,
+    windows: Query<&Window>,
+) {
+    let Some(window) = windows.iter().next() else {
+        return;
+    };
+    for (mut projection, mut transform) in q.iter_mut() {
+        if let Projection::Orthographic(ortho) = &mut *projection {
+            // Center camera on game action (roughly x=100, y=0)
+            transform.translation.x = 100.0;
+            transform.translation.y = 0.0;
+
+            // Debug info
+            // println!("Window: {}x{}", window.width(), window.height());
+            // println!("Old Scale: {}", ortho.scale);
+            // println!("Scaling Mode: {:?}", ortho.scaling_mode);
+
+            // Fit 1200x1200 into the window (increased height from 800 to ensure top is visible)
+            let w_scale = 1200.0 / window.width();
+            let h_scale = 1200.0 / window.height();
+
+            // We want to show AT LEAST 1200x1200.
+            // If window is 600 wide, w_scale = 2.0.
+            // If scale = 2.0 means "Zoom out 2x" (view 2x world), then use w_scale.max(h_scale).
+            // If scale = 0.5 means "Zoom out 2x" (objects 0.5x size), then use 1.0 / ...
+
+            // Try assuming scale > 1.0 means Zoom OUT (View Larger Area)
+            // This is the default in many engines (Camera Size).
+            // If Bevy uses "Scale" as "Magnification", then it's < 1.0.
+            // Let's print the current scale to see what it is by default (should be 1.0).
+
+            let zoom_factor = w_scale.max(h_scale);
+            ortho.scale = zoom_factor;
+
+            // println!("New Scale: {}", ortho.scale);
         }
     }
 }
